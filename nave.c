@@ -97,6 +97,7 @@ int main() {
     keypad(stdscr, TRUE);
     nodelay(stdscr, TRUE);
 
+    //Esto me toma el tamaño de la terminal para crear la ventana del juego
     getmaxyx(stdscr, alto, ancho);
     ventana = newwin(alto, ancho, 0, 0);
 
@@ -154,6 +155,7 @@ int main() {
         // Cada movimiento gasta 1 unidad extra de combustible
         if (movio) {
             pthread_mutex_lock(&recursos.mutex);
+            //Esto es lo que me baja el combustible cada vez que me muevo (Tratar de hacer que gaste 1 de combustible cada dos movimientos)
             if (recursos.combustible > 0) recursos.combustible--;
             pthread_mutex_unlock(&recursos.mutex);
         }
