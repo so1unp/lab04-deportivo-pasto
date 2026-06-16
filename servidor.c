@@ -1,8 +1,75 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
-int main(int argc, char *argv[])
+#include <fcntl.h>
+#include <sys/mman.h>
+
+#include "shared.h"
+
+void generarAsteroides(Mundo *mundo)
 {
-  
-    exit(EXIT_SUCCESS);
+    mundo->cantidadAsteroides = 5;
+
+    srand((unsigned int)time(NULL));
+
+    for(int i = 0; i < mundo->cantidadAsteroides; i++)
+    {
+        mundo->asteroides[i].x = rand() % COLUMNAS;
+        mundo->asteroides[i].y = rand() % FILAS;
+
+        mundo->asteroides[i].deuterio   = rand() % 100;
+        mundo->asteroides[i].mutexio    = rand() % 100;
+        mundo->asteroides[i].semaforita = rand() % 100;
+        mundo->asteroides[i].kernelio   = rand() % 100;
+    }
+}
+
+int main()
+{
+    int fd = shm_open(
+        "/espacio",
+        O_CREAT | O_RDWR,
+        0666
+    );
+
+    if(fd == -1)
+    {
+        perror("shm_open");
+        return 1;
+    }
+
+    if(ftruncate(fd, sizeof(Mundo)) == -1)
+    {
+        perror("ftruncate");
+        return 1;
+    }
+
+    Mundo *mundo = mmap(
+        NULL,
+        sizeof(Mundo),
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        fd,
+        0
+    );
+
+    if(mundo == MAP_FAILED)
+    {
+        perror("mmap");
+        return 1;
+    }
+
+    generarAsteroides(mundo);
+
+    printf("Servidor iniciado.\n");
+    printf("Asteroides generados.\n");
+
+    while(1)
+    {
+        sleep(1);
+    }
+
+    return 0;
 }
