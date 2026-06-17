@@ -12,13 +12,6 @@
 
 typedef struct
 {
-    int x;
-    int y;
-    chtype simbolo;
-} Nave;
-
-typedef struct
-{
     int oxigeno;     // 0–100
     int combustible; // 0–100
     int salir;       // flag para terminar los hilos
@@ -168,10 +161,21 @@ int main()
     pthread_create(&tid_comb, NULL, hilo_combustible, NULL);
 
     // 4. Crear la nave
-    Nave nave;
-    nave.x = COLUMNAS / 2;
-    nave.y = FILAS / 2;
-    nave.simbolo = 'A';
+    int miId = -1;
+
+    for (int i = 0; i < MAX_NAVES; i++)
+    {
+        if (!mundo->naves[i].activa)
+        {
+            mundo->naves[i].id = i;
+            mundo->naves[i].activa = 1;
+            mundo->naves[i].x = COLUMNAS / 2 + i;
+            mundo->naves[i].y = FILAS / 2;
+            mundo->naves[i].simbolo = 'N';
+            miId = i;
+            break;
+        }
+    }
 
     // 5. Loop principal
     int tecla, salir_juego = 0;
@@ -193,34 +197,35 @@ int main()
         switch (tecla)
         {
         case 'w':
-            if (nave.y > 0)
+            if (mundo->naves[miId].y > 0)
             {
-                nave.y--;
+                mundo->naves[miId].y--;
                 movio = 1;
             }
             break;
         case 's':
-            if (nave.y < FILAS - 1)
+            if (mundo->naves[miId].y < FILAS - 1)
             {
-                nave.y++;
+                mundo->naves[miId].y++;
                 movio = 1;
             }
             break;
         case 'a':
-            if (nave.x > 0)
+            if (mundo->naves[miId].x > 0)
             {
-                nave.x--;
+                mundo->naves[miId].x--;
                 movio = 1;
             }
             break;
         case 'd':
-            if (nave.x < COLUMNAS - 1)
+            if (mundo->naves[miId].x < COLUMNAS - 1)
             {
-                nave.x++;
+                mundo->naves[miId].x++;
                 movio = 1;
             }
             break;
         case 'q':
+            mundo->naves[miId].activa = 0;
             salir_juego = 1;
             break;
         }
@@ -252,11 +257,17 @@ int main()
         }
 
         // Dibujar nave
-        mvwaddch(
-            ventana,
-            nave.y + 5,
-            nave.x + 1,
-            nave.simbolo);
+        for (int i = 0; i < MAX_NAVES; i++)
+        {
+            if (mundo->naves[i].activa)
+            {
+                mvwaddch(
+                    ventana,
+                    mundo->naves[i].y + 5,
+                    mundo->naves[i].x + 1,
+                    'N');
+            }
+        }
 
         box(ventana, 0, 0);
 
