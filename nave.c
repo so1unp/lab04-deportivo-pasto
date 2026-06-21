@@ -15,6 +15,16 @@ typedef struct
 {
     int oxigeno;
     int combustible;
+
+    // Inventario propio de la nave (minerales recolectados)
+    int deuterio;
+    int mutexio;
+    int semaforita;
+    int kernelio;
+
+    int extrayendo;          // flag del láser (toggle con 'e')
+    int id_asteroide_actual; // -1 si no estamos sobre ningún asteroide
+
     int salir;
     pthread_mutex_t mutex;
 } Recursos;
@@ -22,6 +32,7 @@ typedef struct
 // ── Variables globales compartidas ───────────────────────────────────────────
 
 Recursos recursos;
+Mundo *mundo_global; // puntero a la memoria compartida (lo usa el hilo minero)
 WINDOW *ventana;
 int alto, ancho;
 
@@ -52,6 +63,38 @@ void *hilo_combustible()
         pthread_mutex_lock(&recursos.mutex);
         if (recursos.salir) { pthread_mutex_unlock(&recursos.mutex); break; }
         if (recursos.combustible > 0) recursos.combustible--;
+        pthread_mutex_unlock(&recursos.mutex);
+    }
+    return NULL;
+}
+
+// ── Hilo: extracción de minerales ──────────────────────────────
+
+void *hilo_extraccion()
+{
+    while (1)
+    {
+        usleep(500000); // tarda ~0.5s en extraer un bloque
+
+        pthread_mutex_lock(&recursos.mutex);
+        if (recursos.salir) { pthread_mutex_unlock(&recursos.mutex); break; }
+
+        // Sólo minamos si el láser está encendido, queda combustible y
+        // estamos parados sobre un asteroide.
+        if (recursos.extrayendo && recursos.combustible > 0 && recursos.id_asteroide_actual != -1)
+        {
+            int id = recursos.id_asteroide_actual;
+
+            // El semáforo de la celda ya garantiza que somos la única nave
+            // sobre este asteroide, así que no hace falta un mutex propio.
+            if (mundo_global->asteroides[id].deuterio   > 0) { mundo_global->asteroides[id].deuterio--;   recursos.deuterio++;   }
+            if (mundo_global->asteroides[id].mutexio    > 0) { mundo_global->asteroides[id].mutexio--;    recursos.mutexio++;    }
+            if (mundo_global->asteroides[id].semaforita > 0) { mundo_global->asteroides[id].semaforita--; recursos.semaforita++; }
+            if (mundo_global->asteroides[id].kernelio   > 0) { mundo_global->asteroides[id].kernelio--;   recursos.kernelio++;   }
+
+            // Gasta combustible extra por el esfuerzo de minar
+            recursos.combustible--;
+        }
         pthread_mutex_unlock(&recursos.mutex);
     }
     return NULL;
@@ -90,6 +133,8 @@ int main()
     Mundo *mundo = mmap(NULL, sizeof(Mundo), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mundo == MAP_FAILED) { perror("mmap"); return 1; }
 
+    mundo_global = mundo; // el hilo minero accede a la memoria compartida por acá
+
     // 1. Inicialización ncurses
     initscr();
     cbreak();
@@ -103,13 +148,20 @@ int main()
     // 2. Inicializar recursos
     recursos.oxigeno = 100;
     recursos.combustible = 100;
+    recursos.deuterio = 0;
+    recursos.mutexio = 0;
+    recursos.semaforita = 0;
+    recursos.kernelio = 0;
+    recursos.extrayendo = 0;           // láser apagado
+    recursos.id_asteroide_actual = -1; // no estamos sobre ningún asteroide
     recursos.salir = 0;
     pthread_mutex_init(&recursos.mutex, NULL);
 
     // 3. Lanzar hilos
-    pthread_t tid_ox, tid_comb;
+    pthread_t tid_ox, tid_comb, tid_ext;
     pthread_create(&tid_ox, NULL, hilo_oxigeno, NULL);
     pthread_create(&tid_comb, NULL, hilo_combustible, NULL);
+    pthread_create(&tid_ext, NULL, hilo_extraccion, NULL);
 
     // 4. Crear la nave y reclamar su celda inicial
     int miId = -1;
@@ -154,6 +206,12 @@ int main()
         case 's': dy =  1; quiereMover = 1; break;
         case 'a': dx = -1; quiereMover = 1; break;
         case 'd': dx =  1; quiereMover = 1; break;
+        case 'e':
+            // prende/apaga el láser de extracción
+            pthread_mutex_lock(&recursos.mutex);
+            recursos.extrayendo = !recursos.extrayendo;
+            pthread_mutex_unlock(&recursos.mutex);
+            break;
         case 'q':
             // liberamos la celda actual antes de salir
             sem_post(&mundo->celdas[mundo->naves[miId].y][mundo->naves[miId].x]);
@@ -186,7 +244,40 @@ int main()
             }
         }
 
+        // ── Detección de colisión con asteroides ──
+        int asteroide_tocado = -1;
+        for (int i = 0; i < mundo->cantidadAsteroides; i++)
+        {
+            if (mundo->naves[miId].x == mundo->asteroides[i].x &&
+                mundo->naves[miId].y == mundo->asteroides[i].y)
+            {
+                asteroide_tocado = i;
+                break;
+            }
+        }
+
+        pthread_mutex_lock(&recursos.mutex);
+        recursos.id_asteroide_actual = asteroide_tocado;
+        if (asteroide_tocado == -1) // salimos del asteroide: apagamos el láser
+            recursos.extrayendo = 0;
+        int minando = recursos.extrayendo;
+        int inv_d = recursos.deuterio;
+        int inv_m = recursos.mutexio;
+        int inv_s = recursos.semaforita;
+        int inv_k = recursos.kernelio;
+        pthread_mutex_unlock(&recursos.mutex);
+
         dibujar_hud(ox, comb);
+
+        if (minando)
+        {
+            wattron(ventana, A_BLINK);
+            mvwprintw(ventana, 3, 2, ">>> EXTRACCION ACTIVA <<<");
+            wattroff(ventana, A_BLINK);
+        }
+        mvwprintw(ventana, 4, 2, "INV  Deu:%d  Mut:%d  Sem:%d  Ker:%d",
+                  inv_d, inv_m, inv_s, inv_k);
+
         dibujarMapa(ventana, mundo);
 
         if (ox == 0 || comb == 0)
@@ -218,6 +309,7 @@ int main()
 
     pthread_join(tid_ox, NULL);
     pthread_join(tid_comb, NULL);
+    pthread_join(tid_ext, NULL);
     pthread_mutex_destroy(&recursos.mutex);
 
     endwin();
