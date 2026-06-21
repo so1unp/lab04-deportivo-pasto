@@ -1,16 +1,17 @@
 #ifndef SHARED_H
 #define SHARED_H
 
-#define FILAS 30
-#define COLUMNAS 50
-#define MAX_ASTEROIDES 10
-#define MAX_NAVES 2
+#include <semaphore.h>
+
+#define FILAS 25
+#define COLUMNAS 25
+#define MAX_ASTEROIDES 5
+#define MAX_NAVES 3
 
 typedef struct
 {
     int x;
     int y;
-
     int deuterio;
     int mutexio;
     int semaforita;
@@ -30,8 +31,8 @@ typedef struct
 {
     Asteroide asteroides[MAX_ASTEROIDES];
     int cantidadAsteroides;
-
     Nave naves[MAX_NAVES];
+    sem_t celdas[FILAS][COLUMNAS]; // un semáforo binario por celda del mapa
 } Mundo;
 
 #endif
