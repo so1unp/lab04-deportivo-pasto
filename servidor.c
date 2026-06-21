@@ -10,7 +10,7 @@
 
 void generarAsteroides(Mundo *mundo)
 {
-    mundo->cantidadAsteroides = 5;
+    mundo->cantidadAsteroides = MAX_ASTEROIDES;
     srand((unsigned int)time(NULL));
     for (int i = 0; i < mundo->cantidadAsteroides; i++)
     {
@@ -33,14 +33,6 @@ void inicializarSemaforos(Mundo *mundo)
             // valor inicial=1 -> celda libre
             sem_init(&mundo->celdas[y][x], 1, 1);
         }
-    }
-
-    // Las celdas donde hay asteroides arrancan ocupadas (0)
-    for (int i = 0; i < mundo->cantidadAsteroides; i++)
-    {
-        int ax = mundo->asteroides[i].x;
-        int ay = mundo->asteroides[i].y;
-        sem_trywait(&mundo->celdas[ay][ax]); // 1 -> 0
     }
 }
 
@@ -68,11 +60,23 @@ void cerrarServidor(int sig)
 int main()
 {
     int fd = shm_open("/espacio", O_CREAT | O_RDWR, 0666);
-    if (fd == -1) { perror("shm_open"); return 1; }
-    if (ftruncate(fd, sizeof(Mundo)) == -1) { perror("ftruncate"); return 1; }
+    if (fd == -1)
+    {
+        perror("shm_open");
+        return 1;
+    }
+    if (ftruncate(fd, sizeof(Mundo)) == -1)
+    {
+        perror("ftruncate");
+        return 1;
+    }
 
     Mundo *mundo = mmap(NULL, sizeof(Mundo), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (mundo == MAP_FAILED) { perror("mmap"); return 1; }
+    if (mundo == MAP_FAILED)
+    {
+        perror("mmap");
+        return 1;
+    }
 
     mundoGlobal = mundo;
     fdGlobal = fd;
