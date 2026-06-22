@@ -9,6 +9,9 @@
 #include <semaphore.h>
 #include "shared.h"
 
+#define OFFSET_MAPA_Y 7 // filas 1-6 quedan libres para HUD
+#define OFFSET_MAPA_X 1
+
 // ── Estructuras ──────────────────────────────────────────────────────────────
 
 typedef struct
@@ -45,8 +48,13 @@ void *hilo_oxigeno()
         usleep(5000000);
 
         pthread_mutex_lock(&recursos.mutex);
-        if (recursos.salir) { pthread_mutex_unlock(&recursos.mutex); break; }
-        if (recursos.oxigeno > 0) recursos.oxigeno--;
+        if (recursos.salir)
+        {
+            pthread_mutex_unlock(&recursos.mutex);
+            break;
+        }
+        if (recursos.oxigeno > 0)
+            recursos.oxigeno--;
         pthread_mutex_unlock(&recursos.mutex);
     }
     return NULL;
@@ -61,8 +69,13 @@ void *hilo_combustible()
         usleep(8000000);
 
         pthread_mutex_lock(&recursos.mutex);
-        if (recursos.salir) { pthread_mutex_unlock(&recursos.mutex); break; }
-        if (recursos.combustible > 0) recursos.combustible--;
+        if (recursos.salir)
+        {
+            pthread_mutex_unlock(&recursos.mutex);
+            break;
+        }
+        if (recursos.combustible > 0)
+            recursos.combustible--;
         pthread_mutex_unlock(&recursos.mutex);
     }
     return NULL;
@@ -77,7 +90,11 @@ void *hilo_extraccion()
         usleep(500000); // tarda ~0.5s en extraer un bloque
 
         pthread_mutex_lock(&recursos.mutex);
-        if (recursos.salir) { pthread_mutex_unlock(&recursos.mutex); break; }
+        if (recursos.salir)
+        {
+            pthread_mutex_unlock(&recursos.mutex);
+            break;
+        }
 
         // Sólo minamos si el láser está encendido, queda combustible y
         // estamos parados sobre un asteroide.
@@ -87,10 +104,26 @@ void *hilo_extraccion()
 
             // El semáforo de la celda ya garantiza que somos la única nave
             // sobre este asteroide, así que no hace falta un mutex propio.
-            if (mundo_global->asteroides[id].deuterio   > 0) { mundo_global->asteroides[id].deuterio--;   recursos.deuterio++;   }
-            if (mundo_global->asteroides[id].mutexio    > 0) { mundo_global->asteroides[id].mutexio--;    recursos.mutexio++;    }
-            if (mundo_global->asteroides[id].semaforita > 0) { mundo_global->asteroides[id].semaforita--; recursos.semaforita++; }
-            if (mundo_global->asteroides[id].kernelio   > 0) { mundo_global->asteroides[id].kernelio--;   recursos.kernelio++;   }
+            if (mundo_global->asteroides[id].deuterio > 0)
+            {
+                mundo_global->asteroides[id].deuterio--;
+                recursos.deuterio++;
+            }
+            if (mundo_global->asteroides[id].mutexio > 0)
+            {
+                mundo_global->asteroides[id].mutexio--;
+                recursos.mutexio++;
+            }
+            if (mundo_global->asteroides[id].semaforita > 0)
+            {
+                mundo_global->asteroides[id].semaforita--;
+                recursos.semaforita++;
+            }
+            if (mundo_global->asteroides[id].kernelio > 0)
+            {
+                mundo_global->asteroides[id].kernelio--;
+                recursos.kernelio++;
+            }
 
             // Gasta combustible extra por el esfuerzo de minar
             recursos.combustible--;
@@ -119,7 +152,7 @@ void dibujarMapa(WINDOW *win, Mundo *mundo)
 {
     for (int i = 0; i < mundo->cantidadAsteroides; i++)
     {
-        mvwaddch(win, mundo->asteroides[i].y + 5, mundo->asteroides[i].x + 1, 'O');
+        mvwaddch(win, mundo->asteroides[i].y + OFFSET_MAPA_Y, mundo->asteroides[i].x + OFFSET_MAPA_X, 'O');
     }
 }
 
@@ -128,10 +161,18 @@ void dibujarMapa(WINDOW *win, Mundo *mundo)
 int main()
 {
     int fd = shm_open("/espacio", O_RDWR, 0666);
-    if (fd == -1) { perror("shm_open"); return 1; }
+    if (fd == -1)
+    {
+        perror("shm_open");
+        return 1;
+    }
 
     Mundo *mundo = mmap(NULL, sizeof(Mundo), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (mundo == MAP_FAILED) { perror("mmap"); return 1; }
+    if (mundo == MAP_FAILED)
+    {
+        perror("mmap");
+        return 1;
+    }
 
     mundo_global = mundo; // el hilo minero accede a la memoria compartida por acá
 
@@ -139,7 +180,10 @@ int main()
     initscr();
     cbreak();
     noecho();
-    keypad(stdscr, TRUE);
+
+    // puede eliminarse ya que esto es para teclas especiales no para el WASD
+    // keypad(stdscr, TRUE);
+
     nodelay(stdscr, TRUE);
 
     getmaxyx(stdscr, alto, ancho);
@@ -202,10 +246,22 @@ int main()
 
         switch (tecla)
         {
-        case 'w': dy = -1; quiereMover = 1; break;
-        case 's': dy =  1; quiereMover = 1; break;
-        case 'a': dx = -1; quiereMover = 1; break;
-        case 'd': dx =  1; quiereMover = 1; break;
+        case 'w':
+            dy = -1;
+            quiereMover = 1;
+            break;
+        case 's':
+            dy = 1;
+            quiereMover = 1;
+            break;
+        case 'a':
+            dx = -1;
+            quiereMover = 1;
+            break;
+        case 'd':
+            dx = 1;
+            quiereMover = 1;
+            break;
         case 'e':
             // prende/apaga el láser de extracción
             pthread_mutex_lock(&recursos.mutex);
@@ -269,6 +325,14 @@ int main()
 
         dibujar_hud(ox, comb);
 
+        if (asteroide_tocado != -1)
+        {
+            Asteroide *a = &mundo->asteroides[asteroide_tocado];
+            mvwprintw(ventana, 5, 2,
+                      "ASTEROIDE #%d -> Deu:%d  Mut:%d  Sem:%d  Ker:%d",
+                      asteroide_tocado, a->deuterio, a->mutexio, a->semaforita, a->kernelio);
+        }
+
         if (minando)
         {
             wattron(ventana, A_BLINK);
@@ -294,7 +358,7 @@ int main()
         {
             if (mundo->naves[i].activa)
             {
-                mvwaddch(ventana, mundo->naves[i].y + 5, mundo->naves[i].x + 1, 'N');
+                mvwaddch(ventana, mundo->naves[i].y + OFFSET_MAPA_Y, mundo->naves[i].x + OFFSET_MAPA_X, 'N');
             }
         }
 
