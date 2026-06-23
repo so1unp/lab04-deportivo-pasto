@@ -181,9 +181,6 @@ int main()
     cbreak();
     noecho();
 
-    // puede eliminarse ya que esto es para teclas especiales no para el WASD
-    // keypad(stdscr, TRUE);
-
     nodelay(stdscr, TRUE);
 
     getmaxyx(stdscr, alto, ancho);
@@ -362,7 +359,33 @@ int main()
             }
         }
 
-        box(ventana, 0, 0);
+        // box(ventana, 0, 0);
+
+        int top = OFFSET_MAPA_Y - 1;
+        int left = OFFSET_MAPA_X - 1;
+        int bottom = OFFSET_MAPA_Y + FILAS;
+        int right = OFFSET_MAPA_X + COLUMNAS;
+
+        /* Horizontal superior e inferior */
+        for (int x = left; x <= right; x++)
+        {
+            mvwaddch(ventana, top, x, '-');
+            mvwaddch(ventana, bottom, x, '-');
+        }
+
+        /* Vertical izquierda y derecha */
+        for (int y = top; y <= bottom; y++)
+        {
+            mvwaddch(ventana, y, left, '|');
+            mvwaddch(ventana, y, right, '|');
+        }
+
+        /* Esquinas */
+        mvwaddch(ventana, top, left, '+');
+        mvwaddch(ventana, top, right, '+');
+        mvwaddch(ventana, bottom, left, '+');
+        mvwaddch(ventana, bottom, right, '+');
+
         wrefresh(ventana);
         usleep(16000);
     }

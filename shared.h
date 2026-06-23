@@ -5,7 +5,7 @@
 
 #define FILAS 25
 #define COLUMNAS 25
-#define MAX_ASTEROIDES 3
+#define MAX_ASTEROIDES 7
 #define MAX_NAVES 3
 
 typedef struct
