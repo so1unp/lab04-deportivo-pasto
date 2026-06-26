@@ -154,6 +154,12 @@ void dibujarMapa(WINDOW *win, Mundo *mundo)
     {
         mvwaddch(win, mundo->asteroides[i].y + OFFSET_MAPA_Y, mundo->asteroides[i].x + OFFSET_MAPA_X, 'O');
     }
+
+    for (int i = 0; i < MAX_ESTACIONES; i++)
+    {
+        mvwprintw(win, mundo->estaciones[i].y + OFFSET_MAPA_Y,
+                  mundo->estaciones[i].x + OFFSET_MAPA_X, "AAA");
+    }
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -309,6 +315,21 @@ int main()
             }
         }
 
+        // ──  Deteccion de colisiones con una estacion ──
+        int estacion_tocada = -1;
+        for (int i = 0; i < MAX_ESTACIONES; i++)
+        {
+            // Verificamos que la Y coincida exactamente
+            // Verificamos que la X de la nave esté entre la X base de la estación y X + 2
+            if (mundo->naves[miId].y == mundo->estaciones[i].y &&
+                mundo->naves[miId].x >= mundo->estaciones[i].x &&
+                mundo->naves[miId].x <= mundo->estaciones[i].x + 2)
+            {
+                estacion_tocada = i;
+                break;
+            }
+        }
+
         pthread_mutex_lock(&recursos.mutex);
         recursos.id_asteroide_actual = asteroide_tocado;
         if (asteroide_tocado == -1) // salimos del asteroide: apagamos el láser
@@ -328,6 +349,11 @@ int main()
             mvwprintw(ventana, 5, 2,
                       "ASTEROIDE #%d -> Deu:%d  Mut:%d  Sem:%d  Ker:%d",
                       asteroide_tocado, a->deuterio, a->mutexio, a->semaforita, a->kernelio);
+        }
+
+        if (estacion_tocada != -1)
+        {
+            mvwprintw(ventana, 5, 2, "ESTACION ESPACIAL #%d -> [ACOPLADO - RECARGANDO]", estacion_tocada);
         }
 
         if (minando)

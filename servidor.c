@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <semaphore.h>
 #include "shared.h"
+#include <sys/msg.h>
 
 void generarAsteroides(Mundo *mundo)
 {
@@ -36,15 +37,27 @@ void inicializarSemaforos(Mundo *mundo)
     }
 }
 
+void inicializarEstaciones(Mundo *mundo)
+{
+    for (int i = 0; i < MAX_ESTACIONES; i++)
+    {
+        mundo->estaciones[i].id = i;
+        mundo->estaciones[i].x = 5;
+        mundo->estaciones[i].y = 5;
+        mundo->estaciones[i].simbolo = 'A';
+        sem_init(&mundo->estaciones[i].sem_hangar, 1, CUPOS_HANGAR);
+    }
+}
+
 void destruirSemaforos(Mundo *mundo)
 {
     for (int y = 0; y < FILAS; y++)
         for (int x = 0; x < COLUMNAS; x++)
             sem_destroy(&mundo->celdas[y][x]);
-}
 
-Mundo *mundoGlobal = NULL;
-int fdGlobal = -1;
+    for (int i = 0; i < MAX_ESTACIONES; i++)
+        sem_destroy(&mundo->estaciones[i].sem_hangar);
+}
 
 void cerrarServidor(int sig)
 {
@@ -54,9 +67,18 @@ void cerrarServidor(int sig)
     munmap(mundoGlobal, sizeof(Mundo));
     close(fdGlobal);
     shm_unlink("/espacio");
+    msgctl(colaMinerales, IPC_RMID, NULL);
+    msgctl(colaPago, IPC_RMID, NULL);
     exit(0);
 }
 
+// variables globales para el servidor
+Mundo *mundoGlobal = NULL;
+int fdGlobal = -1;
+
+// colas de mensajes globales para el servidor
+int colaMinerales;
+int colaPago;
 int main()
 {
     int fd = shm_open("/espacio", O_CREAT | O_RDWR, 0666);
@@ -78,6 +100,15 @@ int main()
         return 1;
     }
 
+    colaMinerales = msgget(COLA_MINERALES, IPC_CREAT | 0666);
+    colaPago = msgget(PAGO, IPC_CREAT | 0666);
+
+    if (colaMinerales == -1 || colaPago == -1)
+    {
+        perror("msgget");
+        exit(1);
+    }
+
     mundoGlobal = mundo;
     fdGlobal = fd;
 
@@ -85,10 +116,12 @@ int main()
 
     generarAsteroides(mundo);
     inicializarSemaforos(mundo);
+    inicializarEstaciones(mundo);
 
     printf("Servidor iniciado.\n");
     printf("Asteroides generados.\n");
     printf("Semaforos de celdas inicializados.\n");
+    printf("Estacion Inicializada.\n");
 
     while (1)
     {
