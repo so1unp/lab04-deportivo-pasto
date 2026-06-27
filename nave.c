@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <semaphore.h>
+#include <mqueue.h>
 #include "shared.h"
 
 #define OFFSET_MAPA_Y 7 // filas 1-6 quedan libres para HUD
@@ -28,6 +29,9 @@ typedef struct
     int extrayendo;          // flag del láser (toggle con 'e')
     int id_asteroide_actual; // -1 si no estamos sobre ningún asteroide
 
+    int id_nave;            // id propio de esta nave (para los mensajes)
+    int solicitar_deposito; // 1 = el loop pidió depositar minerales en la estación
+
     int salir;
     pthread_mutex_t mutex;
 } Recursos;
@@ -38,6 +42,8 @@ Recursos recursos;
 Mundo *mundo_global; // puntero a la memoria compartida (lo usa el hilo minero)
 WINDOW *ventana;
 int alto, ancho;
+
+mqd_t colaMinerales; // cola POSIX donde la nave deposita los minerales 
 
 // ── Hilo: desgaste de oxígeno ──────────────────────────────────
 
@@ -133,6 +139,51 @@ void *hilo_extraccion()
     return NULL;
 }
 
+// Hilo: depósito de minerales en la estación 
+// Espera a que el loop principal marque 'solicitar_deposito' (solo lo hace si la
+// nave está acoplada a una estación). Cuando eso pasa, arma un MensajeMinerales
+// con todo el cargamento, lo manda a la cola COLA_MINERALES y vacía la bodega.
+
+void *hilo_deposito()
+{
+    while (1)
+    {
+        usleep(100000); // chequea ~10 veces por segundo
+
+        pthread_mutex_lock(&recursos.mutex);
+        if (recursos.salir)
+        {
+            pthread_mutex_unlock(&recursos.mutex);
+            break;
+        }
+
+        if (!recursos.solicitar_deposito)
+        {
+            pthread_mutex_unlock(&recursos.mutex);
+            continue;
+        }
+
+        // Tomamos una foto del cargamento y vaciamos la bodega de inmediato,
+        // así no se pierde nada de lo que se siga minando.
+        MensajeMinerales msg;
+        msg.id_nave = recursos.id_nave;
+        msg.cant_mutexio = recursos.mutexio;
+        msg.cant_semaforita = recursos.semaforita;
+        msg.cant_kernelio = recursos.kernelio;
+
+        recursos.mutexio = 0;
+        recursos.semaforita = 0;
+        recursos.kernelio = 0;
+        recursos.solicitar_deposito = 0;
+        pthread_mutex_unlock(&recursos.mutex);
+
+        // Enviamos FUERA del mutex: si la cola estuviera llena, mq_send bloquea
+        // y no queremos congelar el resto de los hilos de la nave.
+        mq_send(colaMinerales, (const char *)&msg, sizeof(MensajeMinerales), 0);
+    }
+    return NULL;
+}
+
 // ── Dibuja la HUD ─────────────────────────────────────────────────────────
 
 void dibujar_hud(int ox, int comb)
@@ -182,6 +233,14 @@ int main()
 
     mundo_global = mundo; // el hilo minero accede a la memoria compartida por acá
 
+    // Abrimos la cola de minerales que ya creó el servidor (solo para escribir).
+    colaMinerales = mq_open(COLA_MINERALES, O_WRONLY);
+    if (colaMinerales == (mqd_t)-1)
+    {
+        perror("mq_open COLA_MINERALES (¿está corriendo el servidor?)");
+        return 1;
+    }
+
     // 1. Inicialización ncurses
     initscr();
     cbreak();
@@ -201,11 +260,13 @@ int main()
     recursos.kernelio = 0;
     recursos.extrayendo = 0;           // láser apagado
     recursos.id_asteroide_actual = -1; // no estamos sobre ningún asteroide
+    recursos.id_nave = -1;             // se setea al reclamar el slot, más abajo
+    recursos.solicitar_deposito = 0;
     recursos.salir = 0;
     pthread_mutex_init(&recursos.mutex, NULL);
 
     // 3. Lanzar hilos
-    pthread_t tid_ox, tid_comb, tid_ext;
+    pthread_t tid_ox, tid_comb, tid_ext, tid_dep;
     pthread_create(&tid_ox, NULL, hilo_oxigeno, NULL);
     pthread_create(&tid_comb, NULL, hilo_combustible, NULL);
     pthread_create(&tid_ext, NULL, hilo_extraccion, NULL);
@@ -230,6 +291,11 @@ int main()
         }
     }
 
+    // Ya sabemos qué nave somos: el hilo de depósito necesita este id para
+    // etiquetar sus mensajes, así que lo lanzamos recién ahora.
+    recursos.id_nave = miId;
+    pthread_create(&tid_dep, NULL, hilo_deposito, NULL);
+
     // 5. Loop principal
     int tecla, salir_juego = 0;
 
@@ -246,6 +312,7 @@ int main()
 
         int dx = 0, dy = 0;
         int quiereMover = 0;
+        int quiere_depositar = 0;
 
         switch (tecla)
         {
@@ -270,6 +337,11 @@ int main()
             pthread_mutex_lock(&recursos.mutex);
             recursos.extrayendo = !recursos.extrayendo;
             pthread_mutex_unlock(&recursos.mutex);
+            break;
+        case 'p':
+            // Pedido de depósito; sólo se concreta si estamos acoplados a una
+            // estación, cosa que recién sabemos más abajo (estacion_tocada).
+            quiere_depositar = 1;
             break;
         case 'q':
             // liberamos la celda actual antes de salir
@@ -339,6 +411,10 @@ int main()
         int inv_m = recursos.mutexio;
         int inv_s = recursos.semaforita;
         int inv_k = recursos.kernelio;
+        // Sólo pedimos depositar si estamos acoplados y hay algo que entregar.
+        if (quiere_depositar && estacion_tocada != -1 &&
+            (inv_m > 0 || inv_s > 0 || inv_k > 0))
+            recursos.solicitar_deposito = 1;
         pthread_mutex_unlock(&recursos.mutex);
 
         dibujar_hud(ox, comb);
@@ -353,7 +429,7 @@ int main()
 
         if (estacion_tocada != -1)
         {
-            mvwprintw(ventana, 5, 2, "ESTACION ESPACIAL #%d -> [ACOPLADO - RECARGANDO]", estacion_tocada);
+            mvwprintw(ventana, 5, 2, "ESTACION ESPACIAL #%d -> [ACOPLADO]  'p' = depositar minerales", estacion_tocada);
         }
 
         if (minando)
@@ -423,7 +499,10 @@ int main()
     pthread_join(tid_ox, NULL);
     pthread_join(tid_comb, NULL);
     pthread_join(tid_ext, NULL);
+    pthread_join(tid_dep, NULL);
     pthread_mutex_destroy(&recursos.mutex);
+
+    mq_close(colaMinerales);
 
     endwin();
     return 0;
