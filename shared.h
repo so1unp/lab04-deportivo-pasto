@@ -11,23 +11,24 @@
 #define MAX_ESTACIONES 1
 #define CUPOS_HANGAR 3
 
-#define COLA_MINERALES 1234
-#define PAGO 2605
+// Colas de mensajes POSIX (ver mq_overview(7)). Los nombres empiezan con '/'.
+#define COLA_MINERALES "/cosmi_minerales" // muchas naves -> una estacion
+#define PAGO_PREFIJO "/cosmi_pago_"       // una cola por nave: se le pega el id
 
-// Cola donde se deposita los minerales que traen la naves 
+#define MAX_MSGS 10 // capacidad (mensajes) de cada cola
+
+// Cola donde las naves depositan los minerales que traen
 typedef struct
 {
-    long tipo; // obligatorio en System V
     int id_nave;
-    int mutexio;
-    int semaforita;
-    int kernelio;
+    int cant_mutexio;
+    int cant_semaforita;
+    int cant_kernelio;
 } MensajeMinerales;
 
-// Cola donde se deposita los pagos que realiza la estacion
+// Cola por la que la estacion paga a la nave (oxigeno y combustible)
 typedef struct
 {
-    long tipo; // obligatorio en System V
     int id_nave;
     int oxigeno;
     int combustible;

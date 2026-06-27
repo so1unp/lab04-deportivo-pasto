@@ -7,7 +7,8 @@
 #include <signal.h>
 #include <semaphore.h>
 #include "shared.h"
-#include <sys/msg.h>
+#include <mqueue.h>
+#include <string.h>
 
 void generarAsteroides(Mundo *mundo)
 {
@@ -59,6 +60,28 @@ void destruirSemaforos(Mundo *mundo)
         sem_destroy(&mundo->estaciones[i].sem_hangar);
 }
 
+// variables globales para el servidor
+Mundo *mundoGlobal = NULL;
+int fdGlobal = -1;
+
+// Crea (o abre si ya existe) una cola POSIX con capacidad para mensajes de
+// 'tam' bytes. Devuelve el descriptor, que cerramos enseguida: la cola
+// sobrevive por su nombre hasta que alguien la borre con mq_unlink.
+static void crearCola(const char *nombre, long tam)
+{
+    struct mq_attr attr = {0};
+    attr.mq_maxmsg = MAX_MSGS;
+    attr.mq_msgsize = tam;
+
+    mqd_t mq = mq_open(nombre, O_CREAT | O_RDWR, 0666, &attr);
+    if (mq == (mqd_t)-1)
+    {
+        perror("mq_open");
+        exit(1);
+    }
+    mq_close(mq);
+}
+
 void cerrarServidor(int sig)
 {
     (void)sig;
@@ -67,18 +90,18 @@ void cerrarServidor(int sig)
     munmap(mundoGlobal, sizeof(Mundo));
     close(fdGlobal);
     shm_unlink("/espacio");
-    msgctl(colaMinerales, IPC_RMID, NULL);
-    msgctl(colaPago, IPC_RMID, NULL);
+
+    // Borramos las colas POSIX para no dejar recursos huérfanos.
+    mq_unlink(COLA_MINERALES);
+    for (int i = 0; i < MAX_NAVES; i++)
+    {
+        char nombre[64];
+        snprintf(nombre, sizeof(nombre), "%s%d", PAGO_PREFIJO, i);
+        mq_unlink(nombre);
+    }
     exit(0);
 }
 
-// variables globales para el servidor
-Mundo *mundoGlobal = NULL;
-int fdGlobal = -1;
-
-// colas de mensajes globales para el servidor
-int colaMinerales;
-int colaPago;
 int main()
 {
     int fd = shm_open("/espacio", O_CREAT | O_RDWR, 0666);
@@ -100,13 +123,16 @@ int main()
         return 1;
     }
 
-    colaMinerales = msgget(COLA_MINERALES, IPC_CREAT | 0666);
-    colaPago = msgget(PAGO, IPC_CREAT | 0666);
+    // Cola única donde todas las naves depositan minerales.
+    crearCola(COLA_MINERALES, sizeof(MensajeMinerales));
 
-    if (colaMinerales == -1 || colaPago == -1)
+    // Una cola de pago por nave (POSIX no permite filtrar por destinatario,
+    // así que cada nave tiene la suya: /cosmi_pago_0, /cosmi_pago_1, ...).
+    for (int i = 0; i < MAX_NAVES; i++)
     {
-        perror("msgget");
-        exit(1);
+        char nombre[64];
+        snprintf(nombre, sizeof(nombre), "%s%d", PAGO_PREFIJO, i);
+        crearCola(nombre, sizeof(MensajePago));
     }
 
     mundoGlobal = mundo;
