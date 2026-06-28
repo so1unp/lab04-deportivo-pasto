@@ -111,6 +111,14 @@ void *hilo_cobro()
         if (colaPago != (mqd_t)-1)
         {
             mq_send(colaPago, (const char *)&pago, sizeof(MensajePago), 0);
+            
+            FILE *bitacora = fopen("bitacora.txt", "a");
+            if (bitacora != NULL) {
+            fprintf(bitacora, "TRANSACCION: Nave %d | Minerales depositados: %d | Pagado: %d Oxi, %d Comb.\n", 
+                    msg.id_nave, total, pago.oxigeno, pago.combustible);
+            fclose(bitacora);
+            }
+
             mq_close(colaPago);
         }
     }

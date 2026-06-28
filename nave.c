@@ -32,6 +32,8 @@ typedef struct
     int id_nave;            // id propio de esta nave (para los mensajes)
     int solicitar_deposito; // 1 = el loop pidió depositar minerales en la estación
 
+    int en_hangar; // 1 sii esta, 0 si no
+
     int salir;
     pthread_mutex_t mutex;
 } Recursos;
@@ -184,6 +186,46 @@ void *hilo_deposito()
     return NULL;
 }
 
+// ── Hilo: Recepción de pago de la estación ──────────────────
+void *hilo_recepcion_pago()
+{
+    // Construimos el nombre de nuestra cola privada (ej: /cosmi_pago_0)
+    char nombre_cola[64];
+    snprintf(nombre_cola, sizeof(nombre_cola), "%s%d", PAGO_PREFIJO, recursos.id_nave);
+    
+    // Abrimos la cola en modo lectura
+    mqd_t mi_cola_pago = mq_open(nombre_cola, O_RDONLY);
+    if (mi_cola_pago == (mqd_t)-1) {
+        return NULL; // Si falla, el hilo muere silenciosamente
+    }
+
+    MensajePago pago;
+    while (1) {
+        // Chequeamos si hay que salir
+        pthread_mutex_lock(&recursos.mutex);
+        int salir = recursos.salir;
+        pthread_mutex_unlock(&recursos.mutex);
+        if (salir) break;
+
+        // Esperamos recibir el pago (se bloquea hasta que la estación pague)
+        ssize_t r = mq_receive(mi_cola_pago, (char *)&pago, sizeof(MensajePago), NULL);
+        
+        if (r != -1) {
+            // Llegó el pago, actualizamos la nave
+            pthread_mutex_lock(&recursos.mutex);
+            recursos.oxigeno += pago.oxigeno;
+            recursos.combustible += pago.combustible;
+            
+            // Limitamos a 100 por las dudas
+            if(recursos.oxigeno > 100) recursos.oxigeno = 100;
+            if(recursos.combustible > 100) recursos.combustible = 100;
+            pthread_mutex_unlock(&recursos.mutex);
+        }
+    }
+    mq_close(mi_cola_pago);
+    return NULL;
+}
+
 // ── Dibuja la HUD ─────────────────────────────────────────────────────────
 
 void dibujar_hud(int ox, int comb)
@@ -266,10 +308,11 @@ int main()
     pthread_mutex_init(&recursos.mutex, NULL);
 
     // 3. Lanzar hilos
-    pthread_t tid_ox, tid_comb, tid_ext, tid_dep;
+    pthread_t tid_ox, tid_comb, tid_ext, tid_dep, tid_pago;
     pthread_create(&tid_ox, NULL, hilo_oxigeno, NULL);
     pthread_create(&tid_comb, NULL, hilo_combustible, NULL);
     pthread_create(&tid_ext, NULL, hilo_extraccion, NULL);
+    pthread_create(&tid_pago, NULL, hilo_recepcion_pago, NULL);
 
     // 4. Crear la nave y reclamar su celda inicial
     int miId = -1;
@@ -403,18 +446,37 @@ int main()
         }
 
         pthread_mutex_lock(&recursos.mutex);
+        
+        // ── Lógica del Hangar (Para aprobar los cupos) ──
+        if (estacion_tocada != -1 && !recursos.en_hangar) {
+            // Intentamos ocupar un slot del hangar (no bloqueante)
+            if (sem_trywait(&mundo->estaciones[estacion_tocada].sem_hangar) == 0) {
+                recursos.en_hangar = 1; // ¡Entramos!
+            } else {
+                estacion_tocada = -1; // Hangar lleno, el juego nos ignora como si no estuviéramos
+            }
+        } else if (estacion_tocada == -1 && recursos.en_hangar) {
+            // Nos alejamos de la estación, liberamos el cupo del hangar
+            sem_post(&mundo->estaciones[0].sem_hangar); 
+            recursos.en_hangar = 0;
+        }
+
         recursos.id_asteroide_actual = asteroide_tocado;
         if (asteroide_tocado == -1) // salimos del asteroide: apagamos el láser
             recursos.extrayendo = 0;
+            
         int minando = recursos.extrayendo;
         int inv_d = recursos.deuterio;
         int inv_m = recursos.mutexio;
         int inv_s = recursos.semaforita;
         int inv_k = recursos.kernelio;
+        
         // Sólo pedimos depositar si estamos acoplados y hay algo que entregar.
         if (quiere_depositar && estacion_tocada != -1 &&
-            (inv_m > 0 || inv_s > 0 || inv_k > 0))
+            (inv_m > 0 || inv_s > 0 || inv_k > 0)) {
             recursos.solicitar_deposito = 1;
+        }
+            
         pthread_mutex_unlock(&recursos.mutex);
 
         dibujar_hud(ox, comb);
