@@ -45,7 +45,7 @@ Mundo *mundo_global; // puntero a la memoria compartida (lo usa el hilo minero)
 WINDOW *ventana;
 int alto, ancho;
 
-mqd_t colaMinerales; // cola POSIX donde la nave deposita los minerales 
+mqd_t colaMinerales; // cola POSIX donde la nave deposita los minerales
 
 // ── Hilo: desgaste de oxígeno ──────────────────────────────────
 
@@ -141,7 +141,7 @@ void *hilo_extraccion()
     return NULL;
 }
 
-// Hilo: depósito de minerales en la estación 
+// Hilo: depósito de minerales en la estación
 // Espera a que el loop principal marque 'solicitar_deposito' (solo lo hace si la
 // nave está acoplada a una estación). Cuando eso pasa, arma un MensajeMinerales
 // con todo el cargamento, lo manda a la cola COLA_MINERALES y vacía la bodega.
@@ -172,10 +172,12 @@ void *hilo_deposito()
         msg.cant_mutexio = recursos.mutexio;
         msg.cant_semaforita = recursos.semaforita;
         msg.cant_kernelio = recursos.kernelio;
+        msg.cant_deuterio = recursos.deuterio;
 
         recursos.mutexio = 0;
         recursos.semaforita = 0;
         recursos.kernelio = 0;
+        recursos.deuterio = 0;
         recursos.solicitar_deposito = 0;
         pthread_mutex_unlock(&recursos.mutex);
 
@@ -192,33 +194,39 @@ void *hilo_recepcion_pago()
     // Construimos el nombre de nuestra cola privada (ej: /cosmi_pago_0)
     char nombre_cola[64];
     snprintf(nombre_cola, sizeof(nombre_cola), "%s%d", PAGO_PREFIJO, recursos.id_nave);
-    
+
     // Abrimos la cola en modo lectura
     mqd_t mi_cola_pago = mq_open(nombre_cola, O_RDONLY);
-    if (mi_cola_pago == (mqd_t)-1) {
+    if (mi_cola_pago == (mqd_t)-1)
+    {
         return NULL; // Si falla, el hilo muere silenciosamente
     }
 
     MensajePago pago;
-    while (1) {
+    while (1)
+    {
         // Chequeamos si hay que salir
         pthread_mutex_lock(&recursos.mutex);
         int salir = recursos.salir;
         pthread_mutex_unlock(&recursos.mutex);
-        if (salir) break;
+        if (salir)
+            break;
 
         // Esperamos recibir el pago (se bloquea hasta que la estación pague)
         ssize_t r = mq_receive(mi_cola_pago, (char *)&pago, sizeof(MensajePago), NULL);
-        
-        if (r != -1) {
+
+        if (r != -1)
+        {
             // Llegó el pago, actualizamos la nave
             pthread_mutex_lock(&recursos.mutex);
             recursos.oxigeno += pago.oxigeno;
             recursos.combustible += pago.combustible;
-            
+
             // Limitamos a 100 por las dudas
-            if(recursos.oxigeno > 100) recursos.oxigeno = 100;
-            if(recursos.combustible > 100) recursos.combustible = 100;
+            if (recursos.oxigeno > 100)
+                recursos.oxigeno = 100;
+            if (recursos.combustible > 100)
+                recursos.combustible = 100;
             pthread_mutex_unlock(&recursos.mutex);
         }
     }
@@ -255,43 +263,90 @@ void dibujarMapa(WINDOW *win, Mundo *mundo)
     }
 }
 
-// ── main ─────────────────────────────────────────────────────────────────────
+void moverNave(Mundo *mundo, int miId, int dx, int dy)
 
-int main()
+{
+    int nuevoX = mundo->naves[miId].x + dx;
+    int nuevoY = mundo->naves[miId].y + dy;
+
+    // Verifico que el destino esté dentro del mapa
+    if (nuevoX < 0 || nuevoX >= COLUMNAS ||
+        nuevoY < 0 || nuevoY >= FILAS)
+    {
+        return;
+    }
+
+    // Intento tomar la celda destino
+    if (sem_trywait(&mundo->celdas[nuevoY][nuevoX]) != 0)
+    {
+        return;
+    }
+
+    // Libero la celda anterior
+    sem_post(&mundo->celdas[mundo->naves[miId].y][mundo->naves[miId].x]);
+
+    // Actualizamos la posición
+    mundo->naves[miId].x = nuevoX;
+    mundo->naves[miId].y = nuevoY;
+
+    // Gastar combustible
+    pthread_mutex_lock(&recursos.mutex);
+
+    if (recursos.combustible > 0)
+        recursos.combustible--;
+
+    pthread_mutex_unlock(&recursos.mutex);
+}
+
+int inicializarJuego(Mundo **mundo)
 {
     int fd = shm_open("/espacio", O_RDWR, 0666);
     if (fd == -1)
     {
         perror("shm_open");
-        return 1;
+        return -1;
     }
 
-    Mundo *mundo = mmap(NULL, sizeof(Mundo), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (mundo == MAP_FAILED)
+    *mundo = mmap(NULL, sizeof(Mundo),
+                  PROT_READ | PROT_WRITE,
+                  MAP_SHARED,
+                  fd, 0);
+
+    if (*mundo == MAP_FAILED)
     {
         perror("mmap");
-        return 1;
+        return -1;
     }
 
-    mundo_global = mundo; // el hilo minero accede a la memoria compartida por acá
+    mundo_global = *mundo;
 
-    // Abrimos la cola de minerales que ya creó el servidor (solo para escribir).
     colaMinerales = mq_open(COLA_MINERALES, O_WRONLY);
     if (colaMinerales == (mqd_t)-1)
     {
-        perror("mq_open COLA_MINERALES (¿está corriendo el servidor?)");
-        return 1;
+        perror("mq_open COLA_MINERALES");
+        return -1;
     }
 
-    // 1. Inicialización ncurses
     initscr();
     cbreak();
     noecho();
-
     nodelay(stdscr, TRUE);
 
     getmaxyx(stdscr, alto, ancho);
     ventana = newwin(alto, ancho, 0, 0);
+
+    return 0;
+}
+// ── main ─────────────────────────────────────────────────────────────────────
+
+int main()
+{
+    Mundo *mundo;
+
+    if (inicializarJuego(&mundo) == -1)
+    {
+        return 1;
+    }
 
     // 2. Inicializar recursos
     recursos.oxigeno = 100;
@@ -396,26 +451,7 @@ int main()
 
         if (quiereMover)
         {
-            int nuevoX = mundo->naves[miId].x + dx;
-            int nuevoY = mundo->naves[miId].y + dy;
-
-            if (nuevoX >= 0 && nuevoX < COLUMNAS && nuevoY >= 0 && nuevoY < FILAS)
-            {
-                // Intento no bloqueante de tomar la celda destino
-                if (sem_trywait(&mundo->celdas[nuevoY][nuevoX]) == 0)
-                {
-                    // Conseguida -> liberamos la celda vieja y nos movemos
-                    sem_post(&mundo->celdas[mundo->naves[miId].y][mundo->naves[miId].x]);
-                    mundo->naves[miId].x = nuevoX;
-                    mundo->naves[miId].y = nuevoY;
-
-                    pthread_mutex_lock(&recursos.mutex);
-                    if (recursos.combustible > 0)
-                        recursos.combustible--;
-                    pthread_mutex_unlock(&recursos.mutex);
-                }
-                // si trywait falla, la celda está ocupada: no nos movemos
-            }
+            moverNave(mundo, miId, dx, dy);
         }
 
         // ── Detección de colisión con asteroides ──
@@ -446,37 +482,44 @@ int main()
         }
 
         pthread_mutex_lock(&recursos.mutex);
-        
+
         // ── Lógica del Hangar (Para aprobar los cupos) ──
-        if (estacion_tocada != -1 && !recursos.en_hangar) {
+        if (estacion_tocada != -1 && !recursos.en_hangar)
+        {
             // Intentamos ocupar un slot del hangar (no bloqueante)
-            if (sem_trywait(&mundo->estaciones[estacion_tocada].sem_hangar) == 0) {
+            if (sem_trywait(&mundo->estaciones[estacion_tocada].sem_hangar) == 0)
+            {
                 recursos.en_hangar = 1; // ¡Entramos!
-            } else {
+            }
+            else
+            {
                 estacion_tocada = -1; // Hangar lleno, el juego nos ignora como si no estuviéramos
             }
-        } else if (estacion_tocada == -1 && recursos.en_hangar) {
+        }
+        else if (estacion_tocada == -1 && recursos.en_hangar)
+        {
             // Nos alejamos de la estación, liberamos el cupo del hangar
-            sem_post(&mundo->estaciones[0].sem_hangar); 
+            sem_post(&mundo->estaciones[0].sem_hangar);
             recursos.en_hangar = 0;
         }
 
         recursos.id_asteroide_actual = asteroide_tocado;
         if (asteroide_tocado == -1) // salimos del asteroide: apagamos el láser
             recursos.extrayendo = 0;
-            
+
         int minando = recursos.extrayendo;
         int inv_d = recursos.deuterio;
         int inv_m = recursos.mutexio;
         int inv_s = recursos.semaforita;
         int inv_k = recursos.kernelio;
-        
+
         // Sólo pedimos depositar si estamos acoplados y hay algo que entregar.
         if (quiere_depositar && estacion_tocada != -1 &&
-            (inv_m > 0 || inv_s > 0 || inv_k > 0)) {
+            (inv_m > 0 || inv_s > 0 || inv_k > 0 || inv_d > 0))
+        {
             recursos.solicitar_deposito = 1;
         }
-            
+
         pthread_mutex_unlock(&recursos.mutex);
 
         dibujar_hud(ox, comb);

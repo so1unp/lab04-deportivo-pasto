@@ -20,6 +20,7 @@ typedef struct
     int mineral_mutexio;
     int mineral_semaforita;
     int mineral_kernelio;
+    int mineral_deuterio;
 
     int ultimo_pago_nave;  // id de la última nave que depositó (-1 = ninguna aún)
     int ultimo_pago_total; // total de minerales del último depósito
@@ -58,7 +59,7 @@ void *hilo_consumo_estacion()
     return NULL;
 }
 
-// Hilo: cobro de cargamentos  
+// Hilo: cobro de cargamentos
 // Lee los minerales que mandan las naves por COLA_MINERALES, los suma al
 // inventario de la estación, calcula cuánto oxígeno/combustible corresponde y
 // manda ese pago de vuelta por la cola PAGO.
@@ -86,12 +87,24 @@ void *hilo_cobro()
         }
 
         // Llegó un cargamento: lo sumamos al inventario de la estación.
-        int total = msg.cant_mutexio + msg.cant_semaforita + msg.cant_kernelio;
+        int total = msg.cant_mutexio + msg.cant_semaforita + msg.cant_kernelio + msg.cant_deuterio;
 
         pthread_mutex_lock(&estacion.mutex);
         estacion.mineral_mutexio += msg.cant_mutexio;
         estacion.mineral_semaforita += msg.cant_semaforita;
         estacion.mineral_kernelio += msg.cant_kernelio;
+        estacion.mineral_deuterio += msg.cant_deuterio;
+
+        // La estación recupera combustible según la cantidad de minerales recibidos
+        estacion.combustible += total;
+        if (estacion.combustible > 100)
+            estacion.combustible = 100;
+
+        // (Si también querés recuperar oxígeno)
+        estacion.oxigeno += total;
+        if (estacion.oxigeno > 100)
+            estacion.oxigeno = 100;
+
         estacion.ultimo_pago_nave = msg.id_nave;
         estacion.ultimo_pago_total = total;
         pthread_mutex_unlock(&estacion.mutex);
@@ -111,12 +124,13 @@ void *hilo_cobro()
         if (colaPago != (mqd_t)-1)
         {
             mq_send(colaPago, (const char *)&pago, sizeof(MensajePago), 0);
-            
+
             FILE *bitacora = fopen("bitacora.txt", "a");
-            if (bitacora != NULL) {
-            fprintf(bitacora, "TRANSACCION: Nave %d | Minerales depositados: %d | Pagado: %d Oxi, %d Comb.\n", 
-                    msg.id_nave, total, pago.oxigeno, pago.combustible);
-            fclose(bitacora);
+            if (bitacora != NULL)
+            {
+                fprintf(bitacora, "TRANSACCION: Nave %d | Minerales depositados: %d | Pagado: %d Oxi, %d Comb.\n",
+                        msg.id_nave, total, pago.oxigeno, pago.combustible);
+                fclose(bitacora);
             }
 
             mq_close(colaPago);
@@ -125,7 +139,7 @@ void *hilo_cobro()
     return NULL;
 }
 
-void dibujar_panel(int comb, int ox, int mut, int sem, int ker,
+void dibujar_panel(int comb, int ox, int deut, int mut, int sem, int ker,
                    int ult_nave, int ult_total)
 {
     werase(ventana_estacion);
@@ -135,15 +149,17 @@ void dibujar_panel(int comb, int ox, int mut, int sem, int ker,
     mvwprintw(ventana_estacion, 2, 2, "Combustible: %3d", comb);
     mvwprintw(ventana_estacion, 3, 2, "Oxigeno:     %3d", ox);
 
-    mvwprintw(ventana_estacion, 5, 2, "Mutexio:     %3d", mut);
-    mvwprintw(ventana_estacion, 6, 2, "Semaforita:  %3d", sem);
-    mvwprintw(ventana_estacion, 7, 2, "Kernelio:    %3d", ker);
+    mvwprintw(ventana_estacion, 5, 2, "Deuterio:    %3d", deut);
+    mvwprintw(ventana_estacion, 6, 2, "Mutexio:     %3d", mut);
+    mvwprintw(ventana_estacion, 7, 2, "Semaforita:  %3d", sem);
+    mvwprintw(ventana_estacion, 8, 2, "Kernelio:    %3d", ker);
 
     if (ult_nave != -1)
-        mvwprintw(ventana_estacion, 9, 2, "Ultimo deposito: nave #%d (%d min.)",
+        mvwprintw(ventana_estacion, 11, 2,
+                  "Ultimo deposito: nave #%d (%d min.)",
                   ult_nave, ult_total);
 
-    mvwprintw(ventana_estacion, 11, 2, "'q' para salir");
+    mvwprintw(ventana_estacion, 13, 2, "'q' para salir");
     wrefresh(ventana_estacion);
 }
 
@@ -182,14 +198,15 @@ int main()
     keypad(stdscr, TRUE);
     nodelay(stdscr, TRUE);
 
-    ventana_estacion = newwin(13, 40, 0, 0);
+    ventana_estacion = newwin(15, 40, 0, 0);
 
     estacion.combustible = 100;
     estacion.oxigeno = 100;
     estacion.mineral_mutexio = 0;
     estacion.mineral_semaforita = 0;
-
     estacion.mineral_kernelio = 0;
+    estacion.mineral_deuterio = 0;
+
     estacion.ultimo_pago_nave = -1;
     estacion.ultimo_pago_total = 0;
     estacion.salir = 0;
@@ -209,6 +226,8 @@ int main()
         pthread_mutex_lock(&estacion.mutex);
         int comb = estacion.combustible;
         int ox = estacion.oxigeno;
+
+        int deut = estacion.mineral_deuterio;
         int mut = estacion.mineral_mutexio;
         int sem = estacion.mineral_semaforita;
         int ker = estacion.mineral_kernelio;
@@ -216,7 +235,7 @@ int main()
         int ult_total = estacion.ultimo_pago_total;
         pthread_mutex_unlock(&estacion.mutex);
 
-        dibujar_panel(comb, ox, mut, sem, ker, ult_nave, ult_total);
+        dibujar_panel(comb, ox, deut, mut, sem, ker, ult_nave, ult_total);
 
         usleep(50000);
     }

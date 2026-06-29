@@ -24,6 +24,7 @@ typedef struct
     int cant_mutexio;
     int cant_semaforita;
     int cant_kernelio;
+    int cant_deuterio;
 } MensajeMinerales;
 
 // Cola por la que la estacion paga a la nave (oxigeno y combustible)
